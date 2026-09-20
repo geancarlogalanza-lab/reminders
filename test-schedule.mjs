@@ -1,0 +1,68 @@
+import { nextOccurrence, toUtc, naiveOf, parseLocal, describeRule, normalizeRule } from './public/schedule.js';
+let fails = 0;
+const iso = (ms, tz) => new Date(ms).toLocaleString('sv-SE', { timeZone: tz }).replace(' ', 'T');
+function eq(name, got, want) { if (got !== want) { fails++; console.log('FAIL', name, '\n  got ', got, '\n  want', want); } else console.log('ok  ', name); }
+const at = (s, tz) => toUtc(parseLocal(s), tz);
+const B = 'Europe/Berlin', NY = 'America/New_York', T = 'Asia/Tokyo';
+
+// basic conversions
+eq('berlin summer', iso(at('2026-07-01T09:00', B), B), '2026-07-01T09:00:00');
+eq('berlin winter', iso(at('2026-12-01T09:00', B), B), '2026-12-01T09:00:00');
+eq('utc offset summer', at('2026-07-01T09:00', B), Date.UTC(2026, 6, 1, 7, 0));
+eq('utc offset winter', at('2026-12-01T09:00', B), Date.UTC(2026, 11, 1, 8, 0));
+// daily across the EU DST change (2026-10-25): keeps 09:00 wall clock
+const startDaily = '2026-10-24T09:00';
+let n = nextOccurrence({ type: 'daily' }, startDaily, B, at('2026-10-24T09:00', B));
+eq('daily next after start', iso(n, B), '2026-10-25T09:00:00');
+n = nextOccurrence({ type: 'daily' }, startDaily, B, n);
+eq('daily after dst', iso(n, B), '2026-10-26T09:00:00');
+eq('dst day is 25h long', at('2026-10-25T09:00', B) - at('2026-10-24T09:00', B), 25 * 3600e3);
+// one-time
+eq('once future', nextOccurrence({ type: 'none' }, '2027-01-01T00:00', T, Date.now()), at('2027-01-01T00:00', T));
+eq('once past', nextOccurrence({ type: 'none' }, '2020-01-01T00:00', T, Date.now()), null);
+// weekly, far in the future from an old start
+n = nextOccurrence({ type: 'weekly' }, '2020-01-06T08:30', NY, at('2026-09-21T08:30', NY)); // Mon
+eq('weekly from old start', iso(n, NY), '2026-09-28T08:30:00');
+n = nextOccurrence({ type: 'weekly' }, '2020-01-06T08:30', NY, at('2026-09-21T08:29', NY));
+eq('weekly same day still due', iso(n, NY), '2026-09-21T08:30:00');
+// monthly with clamping: start Jan 31 -> Feb 28 -> Mar 31
+n = nextOccurrence({ type: 'monthly' }, '2026-01-31T10:00', B, at('2026-02-01T00:00', B));
+eq('monthly clamp feb', iso(n, B), '2026-02-28T10:00:00');
+n = nextOccurrence({ type: 'monthly' }, '2026-01-31T10:00', B, n);
+eq('monthly back to 31', iso(n, B), '2026-03-31T10:00:00');
+// yearly leap day
+n = nextOccurrence({ type: 'yearly' }, '2024-02-29T12:00', B, at('2024-03-01T00:00', B));
+eq('yearly leap -> feb 28', iso(n, B), '2025-02-28T12:00:00');
+n = nextOccurrence({ type: 'yearly' }, '2024-02-29T12:00', B, at('2027-03-01T00:00', B));
+eq('yearly leap -> 2028', iso(n, B), '2028-02-29T12:00:00');
+// weekdays Mon/Wed/Fri
+const r = normalizeRule({ type: 'weekdays', days: [5, 1, 3, 3] });
+eq('normalize weekdays', JSON.stringify(r), '{"type":"weekdays","days":[1,3,5]}');
+n = nextOccurrence(r, '2026-09-22T07:00', B, at('2026-09-22T07:00', B)); // Tue start
+eq('weekdays -> wed', iso(n, B), '2026-09-23T07:00:00');
+n = nextOccurrence(r, '2026-09-22T07:00', B, n);
+eq('weekdays -> fri', iso(n, B), '2026-09-25T07:00:00');
+n = nextOccurrence(r, '2026-09-22T07:00', B, n);
+eq('weekdays -> mon', iso(n, B), '2026-09-28T07:00:00');
+n = nextOccurrence(r, '2026-09-22T07:00', B, at('2026-09-01T00:00', B)); // before start
+eq('weekdays before start', iso(n, B), '2026-09-23T07:00:00');
+// custom every 3 days, and every 2 months, every 2 weeks
+n = nextOccurrence({ type: 'custom', every: 3, unit: 'day' }, '2026-09-01T09:00', B, at('2026-09-07T09:00', B));
+eq('custom 3 days', iso(n, B), '2026-09-10T09:00:00');
+n = nextOccurrence({ type: 'custom', every: 2, unit: 'month' }, '2026-01-15T09:00', B, at('2026-09-16T09:00', B));
+eq('custom 2 months', iso(n, B), '2026-11-15T09:00:00');
+n = nextOccurrence({ type: 'custom', every: 2, unit: 'week' }, '2026-09-01T09:00', B, at('2026-09-15T09:00', B));
+eq('custom 2 weeks', iso(n, B), '2026-09-29T09:00:00');
+// nonexistent time (spring forward 2026-03-29 02:30 Berlin) still yields something sane
+n = nextOccurrence({ type: 'daily' }, '2026-03-28T02:30', B, at('2026-03-28T02:30', B));
+eq('spring-forward gap is next day', new Date(n).getUTCDate(), 29);
+// describe
+eq('desc weekly', describeRule({ type: 'weekly' }, '2026-09-21T09:00'), 'Every Mon');
+eq('desc monthly', describeRule({ type: 'monthly' }, '2026-09-22T09:00'), 'Monthly on the 22nd');
+eq('desc custom', describeRule({ type: 'custom', every: 3, unit: 'day' }, '2026-09-22T09:00'), 'Every 3 days');
+eq('desc weekdays', describeRule({ type: 'weekdays', days: [1,2,3,4,5] }, ''), 'Weekdays');
+// perf: 2000 evaluations should be quick (cron has a 10ms CPU budget per run, we do a handful)
+const t0 = performance.now();
+for (let i = 0; i < 2000; i++) nextOccurrence({ type: 'daily' }, '2020-01-01T09:00', B, Date.now());
+console.log('2000 daily evals ms:', (performance.now() - t0).toFixed(1));
+console.log(fails ? `${fails} FAILED` : 'ALL PASSED');

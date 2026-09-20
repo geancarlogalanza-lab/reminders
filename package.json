@@ -1,0 +1,16 @@
+{
+  "name": "reminders",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute reminders --remote --file schema.sql",
+    "db:init:local": "wrangler d1 execute reminders --local --file schema.sql",
+    "tail": "wrangler tail",
+    "test": "node test-schedule.mjs && node test-worker.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.135.0"
+  }
+}
