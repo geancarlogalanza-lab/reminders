@@ -96,6 +96,8 @@ input[type="date"], input[type="time"] { min-width: 0; }
 }
 .composer input, .composer select { background: var(--bg); }
 .composer .row { display: grid; grid-template-columns: 1.2fr 1fr 1.3fr; gap: 8px; }
+.composer .row2 { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.composer .row2 input[type="time"] { width: 130px; }
 @media (max-width: 460px) {
   .composer .row { grid-template-columns: 1fr 1fr; }
   .composer .row select { grid-column: 1 / -1; }

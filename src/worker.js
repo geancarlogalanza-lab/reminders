@@ -1,4 +1,4 @@
-import { nextOccurrence, normalizeRule, parseLocal, isValidTimeZone, naiveOf } from '../public/schedule.js';
+import { nextOccurrence, normalizeRule, parseLocal, parseTod, isValidTimeZone, naiveOf } from '../public/schedule.js';
 
 const MAX_PER_RUN = 12;          // keeps a catch-up run well inside the free-plan subrequest limit
 const LATE_AFTER_MS = 3 * 60e3;  // mark a send as "late" if it is this much past its time
@@ -82,6 +82,7 @@ function validate(b) {
   if (!isValidTimeZone(tz)) return { error: 'Bad time zone' };
   const rule = normalizeRule(b.rule);
   if (!rule) return { error: 'Bad repeat rule' };
+  if (rule.hours && parseTod(rule.hours.until) <= parseTod(b.start_local.slice(11))) return { error: 'The follow-up cut-off must be later than the start time' };
   return { title, start_local: b.start_local, tz, rule, enabled: b.enabled !== false };
 }
 
@@ -130,7 +131,8 @@ async function runDue(env) {
       nextPing = ping;
     } else {
       // Burst finished. If several occurrences were missed (outage), skip to the next future one.
-      next = rule.type === 'none' ? null : nextOccurrence(rule, row.start_local, row.tz, Math.max(now, row.next_at));
+      // (A one-time reminder yields null here unless it has follow-ups still to come.)
+      next = rule.type === 'none' && !rule.hours ? null : nextOccurrence(rule, row.start_local, row.tz, Math.max(now, row.next_at));
       nextPing = 0;
     }
     if (ping === 1) fired = now;
@@ -159,7 +161,7 @@ async function runDue(env) {
 
 function messageFor(row, now, ping, pings) {
   let text = row.title;
-  if (ping > 1) return `${text} (${ping}/${pings})`;
+  if (ping > 1) return ping <= pings ? `${text} (${ping}/${pings})` : text;
   if (now - row.next_at > LATE_AFTER_MS) {
     const due = new Date(naiveOf(row.next_at, row.tz));
     const today = new Date(naiveOf(now, row.tz));

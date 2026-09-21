@@ -61,6 +61,40 @@ eq('desc weekly', describeRule({ type: 'weekly' }, '2026-09-21T09:00'), 'Every M
 eq('desc monthly', describeRule({ type: 'monthly' }, '2026-09-22T09:00'), 'Monthly on the 22nd');
 eq('desc custom', describeRule({ type: 'custom', every: 3, unit: 'day' }, '2026-09-22T09:00'), 'Every 3 days');
 eq('desc weekdays', describeRule({ type: 'weekdays', days: [1,2,3,4,5] }, ''), 'Weekdays');
+// follow-up series: every 3h until 21:00 on a daily rule -> 09,12,15,18,21 then next day 09
+const hr = normalizeRule({ type: 'daily', hours: { every: 3, until: '21:00' } });
+eq('normalize hours', JSON.stringify(hr), '{"type":"daily","hours":{"every":3,"until":"21:00"}}');
+let seq = [], t = at('2026-09-21T08:00', B);
+for (let i = 0; i < 7; i++) { t = nextOccurrence(hr, '2026-09-21T09:00', B, t); seq.push(iso(t, B).slice(5, 16)); }
+eq('series daily 3h', seq.join(' '), '09-21T09:00 09-21T12:00 09-21T15:00 09-21T18:00 09-21T21:00 09-22T09:00 09-22T12:00');
+// cut-off is inclusive only when it lands exactly; 5h until 21:00 -> 09,14,19 then next day
+seq = []; t = at('2026-09-21T08:00', B);
+for (let i = 0; i < 4; i++) { t = nextOccurrence({ type: 'daily', hours: { every: 5, until: '21:00' } }, '2026-09-21T09:00', B, t); seq.push(iso(t, B).slice(5, 16)); }
+eq('series 5h stops before cut-off', seq.join(' '), '09-21T09:00 09-21T14:00 09-21T19:00 09-22T09:00');
+// series never rolls into the next day even with until 23:59
+seq = []; t = at('2026-09-21T08:00', B);
+for (let i = 0; i < 4; i++) { t = nextOccurrence({ type: 'daily', hours: { every: 10, until: '23:59' } }, '2026-09-21T20:00', B, t); seq.push(iso(t, B).slice(5, 16)); }
+eq('series stays within the day', seq.join(' '), '09-21T20:00 09-22T20:00 09-23T20:00 09-24T20:00');
+// weekdays Mon/Wed + every 4h until 17:00: Mon 09,13,17 then Wed 09
+const wh = { type: 'weekdays', days: [1, 3], hours: { every: 4, until: '17:00' } };
+seq = []; t = at('2026-09-21T08:00', B); // Mon
+for (let i = 0; i < 4; i++) { t = nextOccurrence(wh, '2026-09-21T09:00', B, t); seq.push(iso(t, B).slice(5, 16)); }
+eq('series on chosen weekdays', seq.join(' '), '09-21T09:00 09-21T13:00 09-21T17:00 09-23T09:00');
+// resuming mid-day picks the next follow-up, not tomorrow
+eq('mid-day resume', iso(nextOccurrence(hr, '2026-09-21T09:00', B, at('2026-09-21T13:30', B)), B), '2026-09-21T15:00:00');
+// one-time with follow-ups ends after the last one
+const oh = { type: 'none', hours: { every: 2, until: '13:00' } };
+eq('once + follow-ups last', iso(nextOccurrence(oh, '2026-09-21T09:00', B, at('2026-09-21T12:00', B)), B), '2026-09-21T13:00:00');
+eq('once + follow-ups done', nextOccurrence(oh, '2026-09-21T09:00', B, at('2026-09-21T13:00', B)), null);
+// monthly with follow-ups: after the last follow-up, the next month
+const mh = { type: 'monthly', hours: { every: 6, until: '15:00' } };
+eq('monthly + follow-ups next month', iso(nextOccurrence(mh, '2026-01-31T09:00', B, at('2026-01-31T15:00', B)), B), '2026-02-28T09:00:00');
+// bad hours rejected
+eq('bad hours every', normalizeRule({ type: 'daily', hours: { every: 24, until: '21:00' } }), null);
+eq('bad hours until', normalizeRule({ type: 'daily', hours: { every: 2, until: '9pm' } }), null);
+eq('desc hours', describeRule(hr, '2026-09-21T09:00'), 'Every day · then every 3h until 21:00');
+eq('desc once hours', describeRule(oh, '2026-09-21T09:00'), 'Then every 2h until 13:00');
+
 // perf: 2000 evaluations should be quick (cron has a 10ms CPU budget per run, we do a handful)
 const t0 = performance.now();
 for (let i = 0; i < 2000; i++) nextOccurrence({ type: 'daily' }, '2020-01-01T09:00', B, Date.now());

@@ -1,6 +1,6 @@
 // Keeps the app shell available offline and lets it be installed to the home screen.
 // Network first, so a deploy is picked up immediately; cache is only the fallback.
-const CACHE = 'reminders-shell-v2';
+const CACHE = 'reminders-shell-v3';
 const SHELL = ['/', '/app.js', '/schedule.js', '/style.css', '/manifest.webmanifest', '/logo.png', '/favicon.png'];
 
 self.addEventListener('install', e => {

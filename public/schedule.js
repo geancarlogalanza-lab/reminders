@@ -59,23 +59,57 @@ function monthsBetween(a, b) {
 }
 
 // Validate and normalise a rule object. Returns null if invalid.
+// Any rule may carry a follow-up series: hours = { every: 1..23, until: "HH:MM" } repeats each
+// occurrence every N hours on the same day, up to and including the cut-off time.
 export function normalizeRule(r) {
   if (!r || typeof r !== 'object') return null;
+  let out;
   switch (r.type) {
     case 'none': case 'daily': case 'weekly': case 'monthly': case 'yearly':
-      return { type: r.type };
+      out = { type: r.type }; break;
     case 'weekdays': {
       const days = [...new Set((r.days || []).map(Number))].filter(d => d >= 0 && d <= 6 && Number.isInteger(d)).sort();
-      return days.length ? { type: 'weekdays', days } : null;
+      if (!days.length) return null;
+      out = { type: 'weekdays', days }; break;
     }
     case 'custom': {
       const every = Number(r.every);
       if (!Number.isInteger(every) || every < 1 || every > 999) return null;
       if (!['day', 'week', 'month'].includes(r.unit)) return null;
-      return { type: 'custom', every, unit: r.unit };
+      out = { type: 'custom', every, unit: r.unit }; break;
     }
     default: return null;
   }
+  if (r.hours) {
+    const every = Number(r.hours.every);
+    if (!Number.isInteger(every) || every < 1 || every > 23) return null;
+    if (parseTod(r.hours.until) === null) return null;
+    out.hours = { every, until: r.hours.until };
+  }
+  return out;
+}
+
+// "HH:MM" -> ms since midnight, or null
+export function parseTod(s) {
+  const m = /^(\d{2}):(\d{2})$/.exec(s || '');
+  if (!m || +m[1] > 23 || +m[2] > 59) return null;
+  return (+m[1] * 60 + +m[2]) * 60000;
+}
+
+// First instant strictly after afterMs among the follow-ups of one base occurrence (naive), or null.
+function firstInSeries(base, rule, tz, afterMs) {
+  if (!rule.hours) {
+    const u = toUtc(base, tz);
+    return u > afterMs ? u : null;
+  }
+  const dayStart = Math.floor(base / DAY) * DAY, until = parseTod(rule.hours.until);
+  for (let i = 0; i < 24; i++) {
+    const cand = base + i * rule.hours.every * 3600e3;
+    if (cand - dayStart > until) return null; // past the cut-off (or into the next day)
+    const u = toUtc(cand, tz);
+    if (u > afterMs) return u;
+  }
+  return null;
 }
 
 // First occurrence strictly after `afterMs`, or null if none.
@@ -84,10 +118,7 @@ export function nextOccurrence(rule, startLocal, tz, afterMs) {
   if (start === null) return null;
   const type = rule.type;
 
-  if (type === 'none') {
-    const t = toUtc(start, tz);
-    return t > afterMs ? t : null;
-  }
+  if (type === 'none') return firstInSeries(start, rule, tz, afterMs);
 
   const afterNaive = naiveOf(afterMs, tz);
 
@@ -98,8 +129,8 @@ export function nextOccurrence(rule, startLocal, tz, afterMs) {
       const cand = base + i * DAY + tod;
       if (cand < start) continue;
       if (!rule.days.includes(new Date(cand).getUTCDay())) continue;
-      const u = toUtc(cand, tz);
-      if (u > afterMs) return u;
+      const u = firstInSeries(cand, rule, tz, afterMs);
+      if (u !== null) return u;
     }
     return null;
   }
@@ -118,8 +149,8 @@ export function nextOccurrence(rule, startLocal, tz, afterMs) {
     k = Math.max(0, Math.floor(monthsBetween(start, afterNaive) / stepMonths) - 1);
   }
   for (let i = 0; i < 8; i++, k++) {
-    const u = toUtc(gen(k), tz);
-    if (u > afterMs) return u;
+    const u = firstInSeries(gen(k), rule, tz, afterMs);
+    if (u !== null) return u;
   }
   return null;
 }
@@ -131,8 +162,15 @@ function ordinal(n) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
-// Human description of a rule, e.g. "Every week on Monday".
+// Human description of a rule, e.g. "Every Mon · then every 3h until 21:00".
 export function describeRule(rule, startLocal) {
+  const base = describeBase(rule, startLocal);
+  if (!rule.hours) return base;
+  const tail = `then every ${rule.hours.every}h until ${rule.hours.until}`;
+  return rule.type === 'none' ? tail[0].toUpperCase() + tail.slice(1) : `${base} · ${tail}`;
+}
+
+function describeBase(rule, startLocal) {
   const start = parseLocal(startLocal);
   const d = start === null ? new Date() : new Date(start);
   switch (rule.type) {

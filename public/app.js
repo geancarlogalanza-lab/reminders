@@ -1,4 +1,4 @@
-import { nextOccurrence, describeRule, normalizeRule, parseLocal, toUtc } from './schedule.js';
+import { nextOccurrence, describeRule, normalizeRule, parseLocal, parseTod, toUtc } from './schedule.js';
 
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const LS = { token: 'rm.token', cache: 'rm.cache', queue: 'rm.queue' };
@@ -185,6 +185,13 @@ function formHTML(r) {
           ${opt('custom', 'Custom interval')}
         </select>
       </div>
+      <div class="row2">
+        <select name="hours" aria-label="Follow-ups">
+          <option value="0"${rule.hours ? '' : ' selected'}>No follow-ups</option>
+          ${[1, 2, 3, 4, 5, 6, 8, 10, 12].map(n => `<option value="${n}"${rule.hours && rule.hours.every === n ? ' selected' : ''}>Follow up every ${n === 1 ? 'hour' : n + ' hours'} until…</option>`).join('')}
+        </select>
+        <input type="time" name="until" value="${rule.hours ? rule.hours.until : '21:00'}" aria-label="Follow-ups until" ${rule.hours ? '' : 'hidden'}>
+      </div>
       <div class="days" ${rule.type === 'weekdays' ? '' : 'hidden'}>
         ${DAY_LETTERS.map((l, i) => `<button type="button" data-day="${i}" aria-pressed="${days.includes(i)}" aria-label="${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][i]}">${l}</button>`).join('')}
       </div>
@@ -217,6 +224,13 @@ function readForm(form) {
   let rule = { type };
   if (type === 'weekdays') rule.days = [...form.querySelectorAll('.days [aria-pressed="true"]')].map(b => +b.dataset.day);
   if (type === 'custom') { rule.every = Number(fd.get('every')); rule.unit = fd.get('unit'); }
+  const hours = Number(fd.get('hours'));
+  if (hours) {
+    const until = String(fd.get('until') || '').slice(0, 5);
+    if (parseTod(until) === null) throw 'Pick a cut-off time for the follow-ups.';
+    if (parseTod(until) <= parseTod(time)) throw 'The follow-up cut-off must be later than the start time.';
+    rule.hours = { every: hours, until };
+  }
   rule = normalizeRule(rule);
   if (!rule) throw type === 'weekdays' ? 'Pick at least one day.' : 'Check the repeat settings.';
   const tz = form.dataset.tz || TZ;
@@ -237,6 +251,12 @@ function wireForm(form, onDone) {
     if (e.target.name === 'repeat') {
       form.querySelector('.days').hidden = e.target.value !== 'weekdays';
       form.querySelector('.custom').hidden = e.target.value !== 'custom';
+    }
+    if (e.target.name === 'hours') {
+      const until = form.querySelector('input[name=until]');
+      until.hidden = e.target.value === '0';
+      const start = String(form.querySelector('input[name=time]').value || '').slice(0, 5);
+      if (!until.hidden && parseTod(until.value) !== null && parseTod(start) !== null && parseTod(until.value) <= parseTod(start)) until.value = '23:30';
     }
   });
   form.addEventListener('submit', e => {
@@ -328,7 +348,7 @@ function renderList() {
   const sent = state.reminders.filter(r => r.enabled && r.next_at === null && r.last_fired_at).sort((a, b) => b.last_fired_at - a.last_fired_at);
 
   const row = (r, kind) => {
-    const repeating = r.rule.type !== 'none';
+    const repeating = r.rule.type !== 'none' || !!r.rule.hours;
     let meta;
     if (kind === 'sent') meta = `Sent ${pastLabel(r.last_fired_at)}`;
     else if (kind === 'paused') meta = `Paused · ${describeRule(r.rule, r.start_local)}`;

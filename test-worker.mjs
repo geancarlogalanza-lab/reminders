@@ -144,5 +144,30 @@ await worker.fetch(new Request('http://x/api/reminders/12345678-1234-4123-8123-1
   body: JSON.stringify({ title: 'Laundry 2', start_local: '2030-05-05T10:00', tz: 'Europe/Berlin', rule: { type: 'none' } }),
 }), env, {});
 ok('edit resets ping counter', row('12345678-1234-4123-8123-123456789abd').ping === 0);
+
+// 10) one-time reminder with follow-ups keeps going to the next follow-up after its burst
+env.PINGS = '1'; await tick(); sent = []; // flush the burst test 9 left mid-way
+const dayStart = new Date(now); // build a start_local a few hours ago today (Berlin wall clock)
+import('./public/schedule.js').then(() => {});
+{
+  const { naiveOf } = await import('./public/schedule.js');
+  const nv = new Date(naiveOf(now, 'Europe/Berlin'));
+  const pad = n => String(n).padStart(2, '0');
+  const hh = nv.getUTCHours();
+  if (hh >= 2 && hh <= 20) { // only meaningful when a 2h follow-up fits before the cut-off
+    const startLocal = `${nv.getUTCFullYear()}-${pad(nv.getUTCMonth() + 1)}-${pad(nv.getUTCDate())}T${pad(hh)}:00`;
+    insert('f1', 'Hydrate', startLocal, { type: 'none', hours: { every: 2, until: '23:00' } }, now - 1000);
+    await tick();
+    ok('one-time + follow-ups sends', sent.length === 1 && sent[0].content.startsWith('Hydrate'), JSON.stringify(sent.map(x => x.content)));
+    ok('one-time + follow-ups schedules the next follow-up', row('f1').next_at !== null && row('f1').next_at > now && row('f1').next_at <= now + 2 * 3600e3);
+  } else {
+    console.log('skip one-time + follow-ups (late-night clock)');
+  }
+}
+const badUntil = await worker.fetch(new Request('http://x/api/reminders/12345678-1234-4123-8123-123456789abe', {
+  method: 'PUT', headers: { Authorization: 'Bearer t', 'content-type': 'application/json' },
+  body: JSON.stringify({ title: 'x', start_local: '2030-05-05T10:00', tz: 'Europe/Berlin', rule: { type: 'daily', hours: { every: 2, until: '09:00' } } }),
+}), env, {});
+ok('cut-off before start rejected', badUntil.status === 400 && (await badUntil.json()).error.includes('cut-off'));
 console.log(fails ? `${fails} FAILED` : 'ALL PASSED');
 process.exit(fails ? 1 : 0);

@@ -25,6 +25,9 @@ phone / laptop browser  ──HTTPS──▶  Cloudflare Worker  ──▶  D1 (
 * **Pings**: each occurrence is sent `PINGS` times (default 4), one minute apart — `Title`, then
   `Title (2/4)` … — so one missed buzz is not the end of it. Change the number in `wrangler.jsonc`
   (`vars.PINGS`) and redeploy. Editing or pausing a reminder mid-burst stops the burst.
+* **Follow-ups**: any reminder can add "then every N hours until HH:MM". A 09:00 reminder with
+  "every 3 hours until 21:00" fires at 09, 12, 15, 18 and 21 on the days its repeat rule selects,
+  and each firing gets the usual pings. The cut-off keeps nights quiet.
 * **Time zones**: reminders store the wall-clock time plus the IANA zone they were created in and
   fire at that wall-clock time even across DST changes (`public/schedule.js`, shared by server and
   page).
