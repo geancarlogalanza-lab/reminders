@@ -4,7 +4,7 @@
   "main": "src/worker.js",
   "compatibility_date": "2026-06-01",
   "assets": { "directory": "./public", "binding": "ASSETS" },
-  "vars": { "APP_URL": "https://reminders.gean-minders.workers.dev" },
+  "vars": { "APP_URL": "https://reminders.gean-minders.workers.dev", "PINGS": "4" },
   "triggers": { "crons": ["* * * * *"] },
   "d1_databases": [
     { "binding": "DB", "database_name": "reminders", "database_id": "00763daf-6ffd-4dc5-a733-329242893100" }

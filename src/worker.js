@@ -51,7 +51,7 @@ async function handleApi(request, env, url) {
       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title, start_local = excluded.start_local, tz = excluded.tz,
-        rule = excluded.rule, enabled = excluded.enabled, next_at = excluded.next_at, updated_at = excluded.updated_at
+        rule = excluded.rule, enabled = excluded.enabled, next_at = excluded.next_at, ping = 0, updated_at = excluded.updated_at
     `).bind(id, v.title, v.start_local, v.tz, JSON.stringify(v.rule), v.enabled ? 1 : 0, next_at, now).run();
     const row = await env.DB.prepare('SELECT * FROM reminders WHERE id = ?').bind(id).first();
     return json(rowOut(row));
@@ -118,24 +118,36 @@ async function runDue(env) {
     .prepare('SELECT * FROM reminders WHERE enabled = 1 AND next_at IS NOT NULL AND next_at <= ? ORDER BY next_at LIMIT ?')
     .bind(now, MAX_PER_RUN).all();
 
+  // Each occurrence is sent PINGS times, one minute apart, so a single missed buzz is not the end of it.
+  const pings = Math.max(1, parseInt(env.PINGS, 10) || 1);
+
   for (const row of results) {
     const rule = JSON.parse(row.rule);
-    // If several occurrences were missed (outage), send once and skip to the next future one.
-    const next = rule.type === 'none' ? null : nextOccurrence(rule, row.start_local, row.tz, Math.max(now, row.next_at));
+    const ping = row.ping + 1; // the ping number this send is (1-based)
+    let next, nextPing, fired = row.last_fired_at;
+    if (ping < pings) {
+      next = row.next_at + 60e3;
+      nextPing = ping;
+    } else {
+      // Burst finished. If several occurrences were missed (outage), skip to the next future one.
+      next = rule.type === 'none' ? null : nextOccurrence(rule, row.start_local, row.tz, Math.max(now, row.next_at));
+      nextPing = 0;
+    }
+    if (ping === 1) fired = now;
 
     // Claim atomically: only the run that changes the row sends. Prevents duplicates.
     const claim = await env.DB
-      .prepare('UPDATE reminders SET next_at = ?, last_fired_at = ?, updated_at = ? WHERE id = ? AND next_at = ?')
-      .bind(next, now, now, row.id, row.next_at).run();
+      .prepare('UPDATE reminders SET next_at = ?, ping = ?, last_fired_at = ?, updated_at = ? WHERE id = ? AND next_at = ? AND ping = ?')
+      .bind(next, nextPing, fired, now, row.id, row.next_at, row.ping).run();
     if (!claim.meta.changes) continue;
 
-    const r = await sendDiscord(env, messageFor(row, now));
+    const r = await sendDiscord(env, messageFor(row, now, ping, pings));
     if (!r.ok) {
       console.error(`send failed for ${row.id}: ${r.status} ${r.detail}`);
       // Put it back so the next minute retries. A late reminder beats a lost one.
       await env.DB
-        .prepare('UPDATE reminders SET next_at = ?, last_fired_at = ? WHERE id = ? AND next_at IS ?')
-        .bind(row.next_at, row.last_fired_at, row.id, next).run();
+        .prepare('UPDATE reminders SET next_at = ?, ping = ?, last_fired_at = ? WHERE id = ? AND next_at IS ? AND ping = ?')
+        .bind(row.next_at, row.ping, row.last_fired_at, row.id, next, nextPing).run();
     }
   }
 
@@ -145,8 +157,9 @@ async function runDue(env) {
     .bind(now - PRUNE_SENT_AFTER_MS).run();
 }
 
-function messageFor(row, now) {
+function messageFor(row, now, ping, pings) {
   let text = row.title;
+  if (ping > 1) return `${text} (${ping}/${pings})`;
   if (now - row.next_at > LATE_AFTER_MS) {
     const due = new Date(naiveOf(row.next_at, row.tz));
     const today = new Date(naiveOf(now, row.tz));

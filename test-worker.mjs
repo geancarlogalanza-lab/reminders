@@ -23,7 +23,7 @@ globalThis.fetch = async (url, init) => {
   sent.push(JSON.parse(init.body));
   return new Response(discordStatus === 200 ? '{}' : 'nope', { status: discordStatus });
 };
-const env = { DB, APP_TOKEN: 't', DISCORD_WEBHOOK_URL: 'https://discord.test/hook', DISCORD_USER_ID: '123456789012345678' };
+const env = { DB, APP_TOKEN: 't', DISCORD_WEBHOOK_URL: 'https://discord.test/hook', DISCORD_USER_ID: '123456789012345678', PINGS: '1' };
 const tick = () => new Promise(res => worker.scheduled({}, env, { waitUntil: p => p.then(res, e => { throw e; }) }));
 const row = id => db.prepare('SELECT * FROM reminders WHERE id = ?').get(id);
 const insert = (id, title, start_local, rule, next_at) =>
@@ -105,5 +105,44 @@ insert('m2', 'Pong', '2026-01-01T09:00', { type: 'none' }, now - 1000);
 await tick();
 ok('400 on mention retried without it', calls === 2 && sent[1].content === 'Pong' && row('m2').next_at === null);
 globalThis.fetch = realFetch;
+
+// 9) PINGS=4: one occurrence is sent 4 times a minute apart, then the reminder advances normally
+env.PINGS = '4'; sent = [];
+insert('p1', 'Drink water', '2026-01-01T09:00', { type: 'daily' }, now - 5 * 60e3); // due 5 min ago, so the +1 min steps are all already due
+await tick();
+ok('ping 1 sent plain', sent.length === 1 && sent[0].content.startsWith('Drink water (was due'), sent[0]?.content);
+ok('ping 1 schedules +1 min', row('p1').next_at === now - 4 * 60e3 && row('p1').ping === 1);
+await tick(); await tick();
+ok('pings 2 and 3 numbered', sent.length === 3 && sent[1].content.startsWith('Drink water (2/4)') && sent[2].content.startsWith('Drink water (3/4)'));
+await tick();
+ok('ping 4 sent', sent.length === 4 && sent[3].content.startsWith('Drink water (4/4)'));
+ok('after ping 4 the next occurrence is tomorrow and counter reset', row('p1').next_at > now && row('p1').ping === 0);
+ok('last_fired_at is the first ping time', row('p1').last_fired_at >= now && row('p1').last_fired_at < now + 5000);
+await tick();
+ok('nothing more after the burst', sent.length === 4);
+// one-time reminder: 4 pings then Sent
+sent = [];
+insert('p2', 'Meeting', '2026-01-01T09:00', { type: 'none' }, now - 5 * 60e3);
+for (let i = 0; i < 4; i++) await tick();
+ok('one-time gets 4 pings then clears', sent.length === 4 && row('p2').next_at === null && row('p2').ping === 0);
+// failure mid-burst rolls back that ping so it is retried
+sent = []; discordStatus = 500;
+insert('p3', 'Laundry', '2026-01-01T09:00', { type: 'none' }, now - 5 * 60e3);
+await tick();
+ok('failed ping rolled back', row('p3').ping === 0 && row('p3').next_at === now - 5 * 60e3 && row('p3').last_fired_at === null);
+discordStatus = 200;
+await tick();
+ok('retried as ping 1', sent.length === 2 && sent[1].content.startsWith('Laundry (was due') && row('p3').ping === 1);
+// editing mid-burst resets the counter
+await worker.fetch(new Request('http://x/api/reminders/12345678-1234-4123-8123-123456789abd', {
+  method: 'PUT', headers: { Authorization: 'Bearer t', 'content-type': 'application/json' },
+  body: JSON.stringify({ title: 'Laundry', start_local: '2030-05-05T10:00', tz: 'Europe/Berlin', rule: { type: 'none' } }),
+}), env, {});
+db.prepare('UPDATE reminders SET ping = 2 WHERE id = ?').run('12345678-1234-4123-8123-123456789abd');
+await worker.fetch(new Request('http://x/api/reminders/12345678-1234-4123-8123-123456789abd', {
+  method: 'PUT', headers: { Authorization: 'Bearer t', 'content-type': 'application/json' },
+  body: JSON.stringify({ title: 'Laundry 2', start_local: '2030-05-05T10:00', tz: 'Europe/Berlin', rule: { type: 'none' } }),
+}), env, {});
+ok('edit resets ping counter', row('12345678-1234-4123-8123-123456789abd').ping === 0);
 console.log(fails ? `${fails} FAILED` : 'ALL PASSED');
 process.exit(fails ? 1 : 0);

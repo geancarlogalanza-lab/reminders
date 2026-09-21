@@ -22,6 +22,9 @@ phone / laptop browser  ──HTTPS──▶  Cloudflare Worker  ──▶  D1 (
   back and the next minute retries — a late reminder beats a lost one. If several occurrences of a
   repeating reminder were missed during an outage, it sends once, marks it "sent late", and skips
   to the next future occurrence rather than spamming.
+* **Pings**: each occurrence is sent `PINGS` times (default 4), one minute apart — `Title`, then
+  `Title (2/4)` … — so one missed buzz is not the end of it. Change the number in `wrangler.jsonc`
+  (`vars.PINGS`) and redeploy. Editing or pausing a reminder mid-burst stops the burst.
 * **Time zones**: reminders store the wall-clock time plus the IANA zone they were created in and
   fire at that wall-clock time even across DST changes (`public/schedule.js`, shared by server and
   page).
@@ -90,6 +93,13 @@ Prerequisites: Node.js, a Cloudflare account, a Discord server you control.
 * `node dev-local.mjs` — runs the same Worker in plain Node with an in-memory SQLite and a mock
   Discord endpoint, for machines where `workerd` does not run. Token is `dev`.
 * `npm run tail` — live logs from the deployed Worker (each cron run and any send failures).
+
+## Upgrading an existing database
+
+If the database was created before the `ping` column existed:
+```bash
+npx wrangler d1 execute reminders --remote --command "ALTER TABLE reminders ADD COLUMN ping INTEGER NOT NULL DEFAULT 0"
+```
 
 ## Limits worth knowing
 

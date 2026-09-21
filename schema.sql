@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS reminders (
   rule          TEXT NOT NULL,            -- JSON: {"type":"none"|"daily"|"weekly"|"monthly"|"yearly"|"weekdays","days":[..]|"custom","every":n,"unit":"day|week|month"}
   enabled       INTEGER NOT NULL DEFAULT 1,
   next_at       INTEGER,                  -- epoch ms of the next send; NULL = nothing scheduled
+  ping          INTEGER NOT NULL DEFAULT 0, -- pings already sent for the current occurrence (a reminder is sent PINGS times, a minute apart)
   last_fired_at INTEGER,                  -- epoch ms of the last send
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL

@@ -41,6 +41,7 @@ const env = {
   APP_TOKEN: process.env.APP_TOKEN || 'dev',
   DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL || `http://127.0.0.1:${PORT}/__discord`,
   DISCORD_USER_ID: process.env.DISCORD_USER_ID || '',
+  PINGS: process.env.PINGS || '4',
 };
 const ctx = { waitUntil: p => p.catch(e => console.error('scheduled failed', e)) };
 const runCron = () => worker.scheduled({ scheduledTime: Date.now() }, env, ctx);
